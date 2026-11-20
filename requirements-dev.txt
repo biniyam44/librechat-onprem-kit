@@ -1,0 +1,5 @@
+# Test dependencies (Python 3.12). The connector's own runtime pins are in
+# connectors/outlook_drafts/requirements.txt.
+-r connectors/outlook_drafts/requirements.txt
+pytest==9.2.0
+pyyaml==6.0.3
