@@ -1,0 +1,12 @@
+# Real secrets and data never go into git.
+.env
+certs/
+audit/
+backups/
+*.archive.gz
+*.dump
+config-from-backup.tar.gz
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
