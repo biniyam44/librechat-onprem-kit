@@ -1,0 +1,46 @@
+# On-premises overrides for LibreChat's deploy-compose.yml (LibreChat v0.8.9).
+# Run from the LibreChat folder, with this kit's files copied next to it:
+#   docker compose -f deploy-compose.yml -f compose.onprem.yml up -d
+# Needs Docker Compose 2.24 or newer (for !reset and !override).
+
+services:
+  api:
+    # Pinned by digest in .env, so updates only happen when IT chooses.
+    image: ${LIBRECHAT_API_IMAGE:?set LIBRECHAT_API_IMAGE in .env to a pinned image digest}
+    # The API is never published on the host. Only nginx can reach it, on the Docker network.
+    ports: !reset []
+    depends_on:
+      - outlook-drafts
+
+  client:
+    # nginx publishes 80/443 on the server's internal address only (office LAN and VPN).
+    ports: !override
+      - '${LAN_BIND_IP:?set LAN_BIND_IP in .env}:80:80'
+      - '${LAN_BIND_IP:?set LAN_BIND_IP in .env}:443:443'
+    volumes: !override
+      - ./nginx/onprem.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/allow:/etc/nginx/allow:ro
+      - ./certs:/etc/nginx/certs:ro
+    environment:
+      - CHAT_HOSTNAME=${CHAT_HOSTNAME:?set CHAT_HOSTNAME in .env}
+      - ADMIN_HOSTNAME=${ADMIN_HOSTNAME:?set ADMIN_HOSTNAME in .env}
+      - INHOUSE_APP_ORIGIN=${INHOUSE_APP_ORIGIN:?set INHOUSE_APP_ORIGIN in .env}
+
+  # Outlook mail and calendar connector (connectors/outlook_drafts). Internal only:
+  # no published port; LibreChat reaches it as http://outlook-drafts:8000/mcp.
+  outlook-drafts:
+    build: ./connectors/outlook_drafts
+    image: local/outlook-drafts-mcp:1.0.0
+    container_name: outlook-drafts
+    restart: always
+    environment:
+      - CONNECTOR_ENABLED=${OUTLOOK_CONNECTOR_ENABLED:-true}
+      - AUDIT_LOG_PATH=/audit/outlook-actions.jsonl
+      - ALLOWED_HOSTS=outlook-drafts:8000
+    volumes:
+      - ./audit:/audit
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,91 @@
+# nginx for an internal-only LibreChat. The official nginx image fills in
+# ${CHAT_HOSTNAME}, ${ADMIN_HOSTNAME} and ${INHOUSE_APP_ORIGIN} from the
+# environment at start-up (files in /etc/nginx/templates).
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Plain HTTP only redirects to HTTPS.
+server {
+    listen 80 default_server;
+    server_name _;
+    include /etc/nginx/allow/office-vpn.conf;
+    return 301 https://$host$request_uri;
+}
+
+# Unknown host names get no answer.
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate     /etc/nginx/certs/chat.crt;
+    ssl_certificate_key /etc/nginx/certs/chat.key;
+    return 444;
+}
+
+# LibreChat
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${CHAT_HOSTNAME};
+
+    # Certificate from the company's internal CA, covering both host names.
+    ssl_certificate     /etc/nginx/certs/chat.crt;
+    ssl_certificate_key /etc/nginx/certs/chat.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+
+    # Office and VPN ranges only.
+    include /etc/nginx/allow/office-vpn.conf;
+
+    # Only the in-house web app (and LibreChat itself) may show LibreChat in an iframe.
+    proxy_hide_header X-Frame-Options;
+    add_header Content-Security-Policy "frame-ancestors 'self' ${INHOUSE_APP_ORIGIN}" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://api:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # Answers stream back token by token; do not buffer them.
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+}
+
+# LibreChat admin panel: IT network only.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${ADMIN_HOSTNAME};
+
+    ssl_certificate     /etc/nginx/certs/chat.crt;
+    ssl_certificate_key /etc/nginx/certs/chat.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    include /etc/nginx/allow/it-only.conf;
+
+    resolver 127.0.0.11 valid=30s;
+    set $admin_panel_upstream http://admin-panel:3000;
+
+    location / {
+        proxy_pass $admin_panel_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
