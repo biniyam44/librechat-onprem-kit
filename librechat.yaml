@@ -1,0 +1,168 @@
+# LibreChat configuration for an internal, on-premises company AI workspace.
+# Written for LibreChat v0.8.9 (librechat.yaml config version 1.3.19).
+# Values marked CHANGE are company-specific and are agreed during setup.
+# tests/test_config.py checks the go-live rules in this file.
+
+version: 1.3.19
+cache: true
+
+interface:
+  customWelcome: 'Welcome to the company AI workspace. Chats follow the company retention policy.'
+  modelSelect: true
+  parameters: true
+  presets: true
+  fileSearch: true
+  fileCitations: true
+  artifactUndocking: true
+
+  # Approved connectors only: people can use the MCP servers defined below,
+  # but cannot add their own servers or share them.
+  mcpServers:
+    use: true
+    create: false
+    share: false
+    public: false
+
+  # No shared links to conversations, inside or outside the company.
+  sharedLinks:
+    create: false
+    share: false
+    public: false
+
+  # Agents can be built and shared with colleagues, never made public.
+  agents:
+    use: true
+    create: true
+    share: true
+    public: false
+  remoteAgents:
+    use: false
+    create: false
+    share: false
+    public: false
+
+  # Retention applies to every chat, not only chats marked temporary.
+  retentionMode: 'all'
+  generalChatRetention: 4320 # hours (180 days). CHANGE to the agreed policy.
+  temporaryChatRetention: 24 # hours
+  retainAgentFiles: true # knowledge files attached to shared agents do not expire
+
+registration:
+  # Microsoft Entra ID (OpenID Connect) is the only way to sign in.
+  socialLogins: ['openid']
+
+# Per-person spend limits. LibreChat records a transaction for every model call and
+# deducts token credits from that person's balance. At zero, requests are refused
+# until the next refill. scripts/spend_report.py turns the transactions into a report.
+balance:
+  enabled: true
+  startBalance: 5000000 # first allowance for a new account. CHANGE
+  autoRefillEnabled: true
+  refillIntervalValue: 30
+  refillIntervalUnit: 'days'
+  refillAmount: 20000000 # allowance for each period. CHANGE
+  refillMode: 'reset' # no rollover: each period starts again from the allowance
+  display: 'percent' # people see the share of their allowance they have used
+
+# Internal MCP servers run on private Docker hostnames. LibreChat blocks private
+# addresses by default (SSRF protection), so each one is exempted by host:port.
+mcpSettings:
+  allowedAddresses:
+    - 'outlook-drafts:8000'
+    - 'pace-mcp:8080' # CHANGE: host:port of the existing EFI Pace MCP server
+
+mcpServers:
+  # Built in this kit (connectors/outlook_drafts). Reads the signed-in person's own
+  # mail and calendar and saves reply drafts. It has no way to send, forward or
+  # delete mail, and the Entra app registration is not granted Mail.Send.
+  outlook-drafts:
+    type: streamable-http
+    url: 'http://outlook-drafts:8000/mcp'
+    timeout: 60000
+    headers:
+      # LibreChat exchanges the person's Entra ID session for a Microsoft Graph token
+      # (on-behalf-of flow, scopes from GRAPH_API_SCOPES), so each person can only
+      # ever reach their own mailbox.
+      Authorization: 'Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}'
+    requestHeaders:
+      X-Conversation-Id: '{{LIBRECHAT_BODY_CONVERSATIONID}}'
+
+  # The company's existing EFI Pace connector. It receives the person's identity,
+  # so it applies the same record permissions that person has in Pace.
+  pace-erp:
+    type: streamable-http
+    url: 'http://pace-mcp:8080/mcp' # CHANGE
+    timeout: 60000
+    headers:
+      Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}'
+      X-User-Email: '{{LIBRECHAT_USER_EMAIL}}'
+    requestHeaders:
+      X-Conversation-Id: '{{LIBRECHAT_BODY_CONVERSATIONID}}'
+
+endpoints:
+  agents:
+    recursionLimit: 25
+    maxRecursionLimit: 50
+    # A person approves every connector action that changes something before it runs.
+    # Read-only tools run without asking; sending and deleting are always refused.
+    toolApproval:
+      enabled: true
+      mode: default
+      allow:
+        - 'mcp:outlook-drafts:list_*'
+        - 'mcp:outlook-drafts:get_*'
+        - 'mcp:pace-erp:get_*'
+        - 'mcp:pace-erp:list_*'
+        - 'mcp:pace-erp:search_*'
+      deny:
+        - 'mcp:*:delete_*'
+        - 'mcp:*:send_*'
+      ask:
+        - 'mcp:*:*'
+      reason: 'Check what {tool} will do, then approve or deny it.'
+      allowAlways: false
+    # Runs waiting for approval survive a restart and expire after 24 hours.
+    checkpointer:
+      type: mongo
+      ttl: 86400
+
+  custom:
+    # Grok through xAI's OpenAI-compatible API. The key stays on this server.
+    - name: 'xai'
+      apiKey: '${XAI_API_KEY}'
+      baseURL: 'https://api.x.ai/v1'
+      models:
+        default: ['grok-4.7'] # approved Grok model(s). CHANGE
+        fetch: false # show only the approved list, never the provider's full catalog
+      titleConvo: true
+      titleModel: 'grok-4.7'
+      modelDisplayLabel: 'Grok'
+
+# Approved models, grouped by provider. `handoff: true` makes each one available
+# as a handoff target, so an agent can pass part of a task to another model.
+modelSpecs:
+  list:
+    - name: 'anthropic'
+      label: 'Anthropic'
+      description: 'Long documents, writing and careful analysis'
+      group: 'anthropic'
+      handoff: true
+      preset:
+        endpoint: 'anthropic'
+        model: 'claude-sonnet-5'
+    - name: 'gpt'
+      label: 'GPT'
+      description: 'General questions, spreadsheets and quick drafts'
+      group: 'openAI'
+      handoff: true
+      preset:
+        endpoint: 'openAI'
+        model: 'gpt-6-sol'
+    - name: 'grok'
+      label: 'Grok'
+      description: 'Second opinion and current events'
+      group: 'xai'
+      handoff: true
+      preset:
+        endpoint: 'xai'
+        model: 'grok-4.7'
